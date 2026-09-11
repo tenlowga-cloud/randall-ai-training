@@ -66,6 +66,7 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(payload["vault"]["obsidian_plugin_names"], ["approved-plugin"])
             self.assertEqual(payload["gpu"]["devices"][0]["vram_total_mib"], 24576)
             self.assertEqual(payload["gpu"]["devices"][0]["vram_free_mib"], 0)
+            self.assertEqual(payload["gpu"]["devices"][0]["driver_version"], "555.42")
             self.assertEqual(payload["cli"]["python3"], "available")
             self.assertEqual(payload["cli"]["claude"], "not_found_in_path")
 

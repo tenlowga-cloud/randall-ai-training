@@ -18,4 +18,6 @@ Ask your agent to diagnose the named stage and continue from there. You should n
 
 Keep the repository in a stable, user-owned folder, not Downloads or a temporary directory. Clone it before installation; opening a GitHub webpage does not create local files. Symlinks depend on this retained folder.
 
+For a reviewed update: inspect the incoming diff in a separate checkout, record the accepted revision, remove the current managed adapters with the original installer, then update the retained clone and run plan/apply/doctor again. Personal state remains. Review normal hook trust and verify a fresh prompt afterward. This avoids changing live hook code while reviewing it. If you already changed the clone, restore the recorded revision before uninstalling when possible; do not replace settings to hide a conflict.
+
 To remove the package's adapters, first preview your current installation with `python3 scripts/install.py doctor`, then run `python3 scripts/install.py uninstall`. Personal notes and their pointer must remain. Keep them until their knowledge is safely reconciled with the vault.

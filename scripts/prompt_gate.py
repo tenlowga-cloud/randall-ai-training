@@ -89,15 +89,25 @@ def atomic_receipt(path: Path, receipt: dict[str, Any]) -> None:
 
 def run(platform: str, state: Path, event: dict[str, Any]) -> dict[str, Any]:
     model = active_model(event)
-    receipt = {
-        "version": 1,
+    observation = {
         "event": EVENT,
         "platform": platform,
         "session_id": bounded_session_id(event),
         "model_known": model is not None,
-        "observed_at": int(time.time()),
+        "model_observed": model,
+        "observed_at_ns": time.time_ns(),
     }
-    atomic_receipt(state / "receipts" / f"{platform}.json", receipt)
+    receipt_path = state / "receipts" / f"{platform}.json"
+    history: list[dict[str, Any]] = []
+    if receipt_path.is_file():
+        try:
+            existing = json.loads(receipt_path.read_text(encoding="utf-8"))
+            if isinstance(existing, dict) and isinstance(existing.get("observations"), list):
+                history = [item for item in existing["observations"] if isinstance(item, dict)][-1:]
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            history = []
+    history.append(observation)
+    atomic_receipt(receipt_path, {"version": 1, "observations": history[-2:]})
     return {
         "hookSpecificOutput": {
             "hookEventName": EVENT,

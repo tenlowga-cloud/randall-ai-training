@@ -7,13 +7,17 @@ import shutil
 import subprocess
 
 def prepare(packet):
+    if not isinstance(packet, dict):
+        raise ValueError("Task packet must be a JSON object")
     if packet.get("classification") not in ("public", "cloud-approved"):
         raise ValueError("Only approved cloud material can use this bridge")
     if packet.get("cloud_approved") is not True:
         raise ValueError("Record approval for this task's cloud transfer")
     if packet.get("customizations_reviewed") is not True:
         raise ValueError("Review user hooks, plugins, instructions and managed policy first")
-    workspace = Path(packet.get("workspace", ""))
+    if not isinstance(packet.get("workspace"), str):
+        raise ValueError("workspace must be an absolute path string")
+    workspace = Path(packet["workspace"])
     if not workspace.is_absolute() or not workspace.is_dir():
         raise ValueError("workspace must be an existing absolute directory")
     mode = packet.get("mode", "review")

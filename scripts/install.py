@@ -40,6 +40,18 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def sha256_tree(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted((item for item in root.rglob("*") if item.is_file()), key=lambda item: str(item.relative_to(root))):
+        relative = str(path.relative_to(root)).replace(os.sep, "/").encode("utf-8")
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        data = path.read_bytes()
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    return digest.hexdigest()
+
+
 def path_exists(path: Path) -> bool:
     return path.exists() or path.is_symlink()
 
@@ -227,6 +239,15 @@ class Transaction:
         self.snapshots.append(entry)
         self._persist()
 
+    def secure_directory(self, path: Path) -> None:
+        self.ensure_dir(path)
+        if not any(item["path"] == str(path) for item in self.snapshots):
+            self.snapshots.append(
+                {"path": str(path), "kind": "dirmode", "mode": stat.S_IMODE(path.stat().st_mode)}
+            )
+            self._persist()
+        os.chmod(path, 0o700)
+
     def _persist(self) -> None:
         payload = {
             "owner": OWNER,
@@ -253,6 +274,9 @@ class Transaction:
             path = Path(entry["path"])
             try:
                 if path_exists(path):
+                    if entry["kind"] == "dirmode":
+                        os.chmod(path, entry["mode"])
+                        continue
                     if path.is_dir() and not path.is_symlink():
                         raise OSError("unexpected directory at rollback target")
                     path.unlink()
@@ -307,8 +331,10 @@ class Installer:
             raise InstallError(f"unrecognized installer manifest: {self.manifest_path}")
         if not isinstance(value.get("source"), str):
             raise InstallError(f"installer manifest has an invalid source: {self.manifest_path}")
+        if not isinstance(value.get("python"), str):
+            raise InstallError(f"installer manifest has an invalid Python executable: {self.manifest_path}")
         schemas: dict[str, dict[str, type]] = {
-            "skills": {"target": str, "source": str},
+            "skills": {"target": str, "source": str, "sha256": str},
             "templates": {"path": str, "sha256": str},
             "blocks": {"path": str, "block": str},
             "hooks": {"path": str, "platform": str, "group": dict},
@@ -339,6 +365,13 @@ class Installer:
                 raise InstallError(f"installer manifest contains an out-of-scope hook record: {self.manifest_path}")
         if Path(pointer["path"]) != self.pointer:
             raise InstallError(f"installer manifest contains an out-of-scope pointer record: {self.manifest_path}")
+        source_files = value.get("source_files")
+        if not isinstance(source_files, dict):
+            raise InstallError(f"installer manifest has invalid source hashes: {self.manifest_path}")
+        for key, expected_path in (("runtime", self.runtime), ("prompt_gate", self.gate)):
+            record = source_files.get(key)
+            if not isinstance(record, dict) or record.get("path") != str(expected_path) or not isinstance(record.get("sha256"), str):
+                raise InstallError(f"installer manifest has an invalid {key} hash: {self.manifest_path}")
         return value
 
     def _validate_source(self) -> list[Path]:
@@ -348,6 +381,9 @@ class Installer:
             raise InstallError(f"missing runtime instructions: {self.runtime}")
         if not self.gate.is_file():
             raise InstallError(f"missing prompt gate: {self.gate}")
+        python = Path(sys.executable)
+        if not python.is_file() or not os.access(python, os.X_OK):
+            raise InstallError(f"hook Python executable is unavailable: {python}")
         return iter_skill_sources(self.skills_source)
 
     def _pending_transactions(self) -> tuple[list[Path], list[str]]:
@@ -366,13 +402,14 @@ class Installer:
                 snapshots = payload.get("snapshots")
                 if not isinstance(snapshots, list) or not all(isinstance(item, dict) for item in snapshots):
                     raise InstallError("invalid snapshot list")
-                home_text = os.path.abspath(str(self.home))
+                # realpath normalizes platform aliases such as macOS /var -> /private/var.
+                home_text = os.path.realpath(str(self.home))
                 for item in snapshots:
                     path_text = item.get("path")
                     kind = item.get("kind")
-                    if not isinstance(path_text, str) or kind not in {"absent", "file", "symlink"}:
+                    if not isinstance(path_text, str) or kind not in {"absent", "file", "symlink", "dirmode"}:
                         raise InstallError("invalid snapshot entry")
-                    candidate = os.path.abspath(path_text)
+                    candidate = os.path.realpath(path_text)
                     if os.path.commonpath((home_text, candidate)) != home_text:
                         raise InstallError("snapshot target is outside the selected home")
                     if kind == "file":
@@ -383,11 +420,13 @@ class Installer:
                             raise InstallError("snapshot mode is invalid")
                     if kind == "symlink" and not isinstance(item.get("target"), str):
                         raise InstallError("snapshot symlink target is invalid")
+                    if kind == "dirmode" and (not isinstance(item.get("mode"), int) or not 0 <= item["mode"] <= 0o7777):
+                        raise InstallError("directory mode snapshot is invalid")
                 created_dirs = payload.get("created_dirs", [])
                 if not isinstance(created_dirs, list) or not all(isinstance(item, str) for item in created_dirs):
                     raise InstallError("invalid created directory list")
                 for directory in created_dirs:
-                    if os.path.commonpath((home_text, os.path.abspath(directory))) != home_text:
+                    if os.path.commonpath((home_text, os.path.realpath(directory))) != home_text:
                         raise InstallError("created directory record is outside the selected home")
                 pending.append(index_path)
             except (InstallError, OSError, ValueError) as exc:
@@ -399,6 +438,11 @@ class Installer:
         for item in reversed(payload["snapshots"]):
             path = Path(item["path"])
             if path_exists(path):
+                if item["kind"] == "dirmode":
+                    if not path.is_dir() or path.is_symlink():
+                        raise InstallError(f"directory mode recovery target changed: {path}")
+                    os.chmod(path, item["mode"])
+                    continue
                 if path.is_dir() and not path.is_symlink():
                     raise InstallError(f"unexpected directory blocks recovery: {path}")
                 path.unlink()
@@ -423,6 +467,11 @@ class Installer:
         pending, conflicts = self._pending_transactions()
         if conflicts:
             raise InstallError("; ".join(conflicts))
+        if pending:
+            raise InstallError(
+                "interrupted transaction needs scoped manual recovery; refusing to overwrite potentially newer user edits: "
+                + ", ".join(str(path) for path in pending)
+            )
         recovered: list[str] = []
         for index_path in pending:
             self._recover_transaction(index_path)
@@ -442,9 +491,12 @@ class Installer:
             }
         pending, transaction_conflicts = self._pending_transactions()
         conflicts.extend(transaction_conflicts)
-        actions.extend(f"recover interrupted transaction {path}" for path in pending)
+        conflicts.extend(
+            f"interrupted transaction requires scoped manual recovery because intervening edits cannot be ruled out: {path}"
+            for path in pending
+        )
         if pending or transaction_conflicts:
-            warnings.append("interrupted state must be recovered before a fresh installation can be planned")
+            warnings.append("use transaction before-images for review; the installer will not overwrite current files blindly")
             return {"ok": not conflicts, "conflicts": conflicts, "warnings": warnings, "actions": actions}
         try:
             skills = self._validate_source()
@@ -464,6 +516,14 @@ class Installer:
                         conflicts.append(f"orphaned Randall skill link without manifest: {target}")
                 else:
                     actions.append(f"link {target} -> {skill}")
+        if manifest:
+            recorded_skills = {item["source"]: item["sha256"] for item in manifest["skills"]}
+            for skill in skills:
+                if str(skill) in recorded_skills and sha256_tree(skill) != recorded_skills[str(skill)]:
+                    conflicts.append(f"canonical skill changed since install; review before update: {skill}")
+            for key, path in (("runtime", self.runtime), ("prompt_gate", self.gate)):
+                if sha256_bytes(path.read_bytes()) != manifest["source_files"][key]["sha256"]:
+                    conflicts.append(f"canonical {key} changed since install; review before update: {path}")
         try:
             for source_file in iter_personal_files(self.personal_source):
                 target = self.personal_dir / source_file.relative_to(self.personal_source)
@@ -531,6 +591,7 @@ class Installer:
         hook_records = list(old_manifest.get("hooks", []))
         try:
             transaction = Transaction(self.state_dir)
+            transaction.secure_directory(self.state_dir)
             owned_skill_targets = {item["target"] for item in created_skills}
             for skill in skills:
                 for root in (self.home / ".claude" / "skills", self.home / ".agents" / "skills"):
@@ -539,16 +600,18 @@ class Installer:
                         transaction.ensure_dir(target.parent)
                         transaction.capture(target)
                         target.symlink_to(skill, target_is_directory=True)
-                        created_skills.append({"target": str(target), "source": str(skill)})
+                        created_skills.append({"target": str(target), "source": str(skill), "sha256": sha256_tree(skill)})
                         owned_skill_targets.add(str(target))
             for source_file in iter_personal_files(self.personal_source):
                 relative = source_file.relative_to(self.personal_source)
                 target = self.personal_dir / relative
                 if not path_exists(target):
                     transaction.ensure_dir(target.parent)
+                    transaction.secure_directory(self.personal_dir)
+                    transaction.secure_directory(target.parent)
                     transaction.capture(target)
                     data = source_file.read_bytes()
-                    atomic_write_bytes(target, data, stat.S_IMODE(source_file.stat().st_mode))
+                    atomic_write_bytes(target, data, 0o600)
                     created_templates.append({"path": str(target), "sha256": sha256_bytes(data)})
             block = managed_block(self.runtime, self.pointer)
             recorded_docs = {item["path"] for item in block_records}
@@ -580,13 +643,17 @@ class Installer:
             pointer_existed = self.pointer.exists()
             if not pointer_existed:
                 transaction.capture(self.pointer)
-                atomic_write_text(self.pointer, self.desired_pointer())
+                atomic_write_text(self.pointer, self.desired_pointer(), 0o600)
             manifest = {
                 "owner": OWNER,
                 "version": VERSION,
                 "source": str(self.source),
                 "installed_at": int(time.time()),
                 "python": sys.executable,
+                "source_files": {
+                    "runtime": {"path": str(self.runtime), "sha256": sha256_bytes(self.runtime.read_bytes())},
+                    "prompt_gate": {"path": str(self.gate), "sha256": sha256_bytes(self.gate.read_bytes())},
+                },
                 "backup_transaction": str(transaction.index_path),
                 "skills": created_skills,
                 "templates": created_templates,
@@ -622,6 +689,7 @@ class Installer:
 
     def doctor(self) -> dict[str, Any]:
         findings: list[dict[str, str]] = []
+        verified_hooks = 0
         pending, transaction_conflicts = self._pending_transactions()
         findings.extend({"level": "error", "message": message} for message in transaction_conflicts)
         findings.extend(
@@ -636,10 +704,23 @@ class Installer:
             return {"status": "unhealthy", "ok": False, "findings": findings}
         if Path(manifest.get("source", "")).resolve() != self.source:
             findings.append({"level": "error", "message": "manifest source does not match requested source"})
+        python = Path(manifest.get("python", ""))
+        if not python.is_file() or not os.access(python, os.X_OK):
+            findings.append({"level": "error", "message": f"hook Python executable is unavailable: {python}"})
+        for key, path in (("runtime", self.runtime), ("prompt_gate", self.gate)):
+            record = manifest["source_files"][key]
+            if not path.is_file() or sha256_bytes(path.read_bytes()) != record["sha256"]:
+                findings.append(
+                    {"level": "error", "message": f"canonical {key} drifted; review before uninstall and re-apply: {path}"}
+                )
         for item in manifest.get("skills", []):
             target, source = Path(item["target"]), Path(item["source"])
             if not source.is_dir() or not (source / "SKILL.md").is_file():
                 findings.append({"level": "error", "message": f"canonical skill source is missing: {source}"})
+            elif sha256_tree(source) != item["sha256"]:
+                findings.append(
+                    {"level": "error", "message": f"canonical skill drifted; review before uninstall and re-apply: {source}"}
+                )
             elif not target.is_symlink() or target.resolve() != source.resolve():
                 findings.append({"level": "error", "message": f"skill link drift: {target}"})
         pointer = Path(manifest["pointer"]["path"])
@@ -663,19 +744,38 @@ class Installer:
             if receipt.is_file():
                 try:
                     receipt_data = load_object_json(receipt)
-                    if receipt_data.get("event") == "UserPromptSubmit" and receipt_data.get("platform") == item["platform"]:
+                    observations = receipt_data.get("observations")
+                    latest = observations[-1] if isinstance(observations, list) and observations else None
+                    if (
+                        isinstance(latest, dict)
+                        and latest.get("event") == "UserPromptSubmit"
+                        and latest.get("platform") == item["platform"]
+                        and isinstance(latest.get("observed_at_ns"), int)
+                    ):
+                        verified_hooks += 1
                         findings.append({"level": "info", "message": f"{item['platform']} hook has an execution receipt"})
                     else:
                         findings.append({"level": "warning", "message": f"{item['platform']} receipt is invalid"})
                 except InstallError:
                     findings.append({"level": "warning", "message": f"{item['platform']} receipt is unreadable"})
             else:
-                findings.append({"level": "warning", "message": f"{item['platform']} hook configured but execution is not yet proven"})
+                findings.append(
+                    {
+                        "level": "warning",
+                        "message": f"{item['platform']} hook structure is configured; runtime execution is not verified",
+                    }
+                )
         override = self.home / ".codex" / "AGENTS.override.md"
         if override.exists():
             findings.append({"level": "warning", "message": f"{override} may shadow the managed AGENTS.md block"})
         ok = not any(item["level"] == "error" for item in findings)
-        return {"status": "healthy" if ok else "unhealthy", "ok": ok, "findings": findings}
+        if not ok:
+            status = "unhealthy"
+        elif verified_hooks < len(manifest.get("hooks", [])):
+            status = "configured-unverified"
+        else:
+            status = "healthy"
+        return {"status": status, "ok": ok, "findings": findings}
 
     def inspect_uninstall(self) -> dict[str, Any]:
         conflicts: list[str] = []

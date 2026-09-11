@@ -168,7 +168,7 @@ def gpu_inventory() -> dict[str, Any]:
                 "model": known_text(model),
                 "vram_total_mib": parse_mib(total, allow_zero=False),
                 "vram_free_mib": parse_mib(free, allow_zero=True),
-                "driver": known_text(driver),
+                "driver_version": known_text(driver),
             }
         )
 

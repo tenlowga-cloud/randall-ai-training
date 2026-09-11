@@ -46,12 +46,14 @@ class PromptGateTests(unittest.TestCase):
             receipt_path = state / "receipts" / "codex.json"
             receipt_text = receipt_path.read_text(encoding="utf-8")
             receipt = json.loads(receipt_text)
-            self.assertEqual(receipt["session_id"], "session-123")
-            self.assertEqual(receipt["event"], "UserPromptSubmit")
-            self.assertEqual(receipt["platform"], "codex")
-            self.assertTrue(receipt["model_known"])
+            observation = receipt["observations"][-1]
+            self.assertEqual(observation["session_id"], "session-123")
+            self.assertEqual(observation["event"], "UserPromptSubmit")
+            self.assertEqual(observation["platform"], "codex")
+            self.assertTrue(observation["model_known"])
+            self.assertEqual(observation["model_observed"], "gpt-6-astra")
+            self.assertIsInstance(observation["observed_at_ns"], int)
             self.assertNotIn(secret, receipt_text)
-            self.assertNotIn("gpt-6-astra", receipt_text)
 
     def test_unknown_model_is_reported_without_reading_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -60,7 +62,7 @@ class PromptGateTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             output = json.loads(result.stdout)
             self.assertIn("active model is unknown", output["hookSpecificOutput"]["additionalContext"])
-            receipt = json.loads((state / "receipts" / "claude.json").read_text())
+            receipt = json.loads((state / "receipts" / "claude.json").read_text())["observations"][-1]
             self.assertFalse(receipt["model_known"])
             self.assertIsNone(receipt["session_id"])
 
@@ -77,7 +79,16 @@ class PromptGateTests(unittest.TestCase):
             self.assertNotIn(injection, combined)
             receipt_text = (state / "receipts" / "codex.json").read_text()
             self.assertNotIn(injection, receipt_text)
-            self.assertEqual(json.loads(receipt_text)["session_id"], "okid")
+            self.assertEqual(json.loads(receipt_text)["observations"][-1]["session_id"], "okid")
+
+    def test_receipt_keeps_only_last_two_observations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            for session_id in ("one", "two", "three"):
+                result = self.invoke(state, json.dumps({"session_id": session_id}).encode())
+                self.assertEqual(result.returncode, 0)
+            observations = json.loads((state / "receipts" / "codex.json").read_text())["observations"]
+            self.assertEqual([item["session_id"] for item in observations], ["two", "three"])
 
     def test_oversize_input_is_rejected_without_a_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

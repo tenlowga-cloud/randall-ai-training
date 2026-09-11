@@ -7,6 +7,11 @@ bridge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bridge)
 
 class BridgeTests(unittest.TestCase):
+    def test_invalid_packet_shapes(self):
+        for packet in ([], None, "text", {}):
+            with self.assertRaises(ValueError):
+                bridge.prepare(packet)
+
     def test_scope_and_no_shell(self):
         with tempfile.TemporaryDirectory(prefix="Randall space ") as home:
             packet = dict(classification="public", cloud_approved=True,

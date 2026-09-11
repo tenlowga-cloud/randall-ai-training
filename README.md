@@ -23,6 +23,7 @@ No hardware, employer access, model entitlement, voice preference, or cloud-data
 ## Included
 
 - Portable **prompt-improver-silent, prompt-improver, wrap, simple-talk, ghost-mode, project-cleanup, and planning-mode** skills.
+- A [skill map](docs/SKILLS.md) explaining when each runs and how it transfers to other AI systems.
 - A [network-engineering procedure](docs/NETWORK-WORKFLOW.md) for source-backed config review, lab validation, change plans, and rollback.
 - A shared skill source linked to current Codex and Claude Code discovery locations.
 - A standard-library Python installer with preview, conflict checks, backups, doctor, and conservative uninstall.
@@ -47,7 +48,7 @@ python3 scripts/install.py doctor
 
 Read the plan before apply. If the installer reports a name conflict, your AI should compare the existing skill and offer a merge or a separate name; it must not delete your existing skill to make installation pass.
 
-Keep this checkout at its installed location. Moving or deleting it breaks skill links. Updates are reviewed changes, not an automatic pull on every prompt. The agent must run doctor after an update and recheck hook trust if its definition changed.
+Keep this checkout at its installed location. Moving or deleting it breaks skill links. Because links are live, review proposed updates in a separate checkout before changing this installed copy: a pull, branch switch or local edit changes what the agents load immediately. There is no automatic updater. Record the accepted revision, run doctor after an authorized update and recheck hook trust if its definition changed. Follow recovery if the Python executable or clone path changes.
 
 ## Your files stay yours
 

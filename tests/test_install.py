@@ -69,11 +69,11 @@ class InstallerTests(unittest.TestCase):
                 shlex.split(command),
                 [
                     install.sys.executable,
-                    str(self.source / "scripts" / "prompt_gate.py"),
+                    str(self.installer.gate),
                     "--platform",
                     "codex",
                     "--state",
-                    str(self.home / ".local" / "share" / "randall-ai"),
+                    str(self.installer.state_dir),
                 ],
             )
         self.assertTrue((self.home / ".claude" / "skills" / "sample-skill").is_symlink())
@@ -193,30 +193,52 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(self.installer.apply()["ok"])
         before = self.installer.doctor()
         messages = [item["message"] for item in before["findings"]]
-        self.assertTrue(any("configured but execution is not yet proven" in message for message in messages))
+        self.assertEqual(before["status"], "configured-unverified")
+        self.assertTrue(any("runtime execution is not verified" in message for message in messages))
         receipt = self.installer.state_dir / "receipts" / "codex.json"
         receipt.parent.mkdir(parents=True, exist_ok=True)
-        receipt.write_text(json.dumps({"event": "UserPromptSubmit", "platform": "codex"}), encoding="utf-8")
+        receipt.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "observations": [
+                        {"event": "UserPromptSubmit", "platform": "codex", "observed_at_ns": 123}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
         after = self.installer.doctor()
         messages = [item["message"] for item in after["findings"]]
         self.assertIn("codex hook has an execution receipt", messages)
 
-    def test_interrupted_transaction_is_recovered_before_fresh_apply(self) -> None:
+    def test_fresh_local_state_and_seeded_personal_files_are_private(self) -> None:
+        self.assertTrue(self.installer.apply()["ok"])
+        personal = self.installer.personal_dir / "nested" / "owner.md"
+        self.assertEqual(self.installer.state_dir.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(personal.stat().st_mode & 0o777, 0o600)
+
+    def test_doctor_reports_runtime_hash_drift_before_rebaseline(self) -> None:
+        self.assertTrue(self.installer.apply()["ok"])
+        (self.source / "runtime.md").write_text("# Reviewed new runtime\n", encoding="utf-8")
+        result = self.installer.doctor()
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("canonical runtime drifted" in item["message"] for item in result["findings"]))
+
+    def test_interrupted_transaction_refuses_blind_recovery(self) -> None:
         interrupted = install.Transaction(self.installer.state_dir)
         partial = self.home / ".codex" / "hooks.json"
         interrupted.ensure_dir(partial.parent)
         interrupted.capture(partial)
         install.atomic_write_text(partial, '{"partial": true}\n')
         plan = self.installer.inspect_install()
-        self.assertTrue(any("recover interrupted transaction" in action for action in plan["actions"]))
+        self.assertFalse(plan["ok"])
+        self.assertTrue(any("scoped manual recovery" in conflict for conflict in plan["conflicts"]))
 
         result = self.installer.apply()
-        self.assertTrue(result["ok"], result)
-        self.assertEqual(len(result["recovered_transactions"]), 1)
-        config = json.loads(partial.read_text())
-        self.assertNotIn("partial", config)
-        recovered = json.loads(interrupted.index_path.read_text())
-        self.assertEqual(recovered["status"], "recovered")
+        self.assertFalse(result["ok"])
+        self.assertEqual(json.loads(partial.read_text()), {"partial": True})
+        self.assertEqual(json.loads(interrupted.index_path.read_text())["status"], "in-progress")
 
     def test_doctor_flags_missing_canonical_skill_even_when_link_text_matches(self) -> None:
         self.assertTrue(self.installer.apply()["ok"])
