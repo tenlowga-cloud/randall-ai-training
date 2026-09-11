@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "updated": "2026-09-11",
+  "source_id": "TRAINING-BRIEF-01A090F8",
+  "rules": {
+    "verify_before_use": true,
+    "official_source_preferred": true,
+    "unknown_is_valid": true,
+    "do_not_store_secrets": true
+  },
+  "platforms": [
+    {
+      "platform": "Claude",
+      "provider": "Anthropic",
+      "account_status": "unknown",
+      "available_models": [],
+      "default_model": null,
+      "verified_at": null,
+      "evidence_source": null,
+      "notes": "Confirm the product, account or seat, model picker, and enabled tools during setup."
+    },
+    {
+      "platform": "ChatGPT",
+      "provider": "OpenAI",
+      "account_status": "unknown",
+      "available_models": [],
+      "default_model": null,
+      "verified_at": null,
+      "evidence_source": null,
+      "notes": "Confirm the product, account or seat, model picker, and enabled tools during setup."
+    },
+    {
+      "platform": "Local AI",
+      "provider": null,
+      "account_status": "not-applicable",
+      "available_models": [],
+      "default_model": null,
+      "verified_at": null,
+      "evidence_source": null,
+      "notes": "GPU server, operating system, runtime, and installed models are unknown until directly inspected."
+    }
+  ]
+}

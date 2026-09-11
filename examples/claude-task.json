@@ -1,0 +1,12 @@
+{
+  "classification": "public",
+  "cloud_approved": false,
+  "customizations_reviewed": false,
+  "workspace": "/replace/with/approved/task/workspace",
+  "mode": "review",
+  "model": "sonnet",
+  "max_turns": 4,
+  "max_budget_usd": 0.5,
+  "timeout_seconds": 180,
+  "brief": "Review this synthetic lab plan: VLAN 20 uses 192.0.2.0/24. Identify missing prerequisites, validation and rollback. Do not connect to any devices."
+}
